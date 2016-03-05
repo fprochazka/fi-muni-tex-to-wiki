@@ -1,0 +1,6 @@
+{
+  "require": {
+    "nette/tokenizer": "~2.2",
+    "nette/utils": "~2.3"
+  }
+}

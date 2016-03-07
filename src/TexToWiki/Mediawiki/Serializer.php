@@ -24,6 +24,10 @@ class Serializer
 		'\\Dbb' => '\\D',
 	];
 
+	public $mathSectionReplacement = [
+		'tabular' => 'array',
+	];
+
 	public function convert(AST\Document $document) : \Generator
 	{
 		foreach ($document->getSections() as $section) {
@@ -40,7 +44,8 @@ class Serializer
 		$this->convertNodeChildren($section);
 
 		$content = ob_get_clean();
-		$content = Strings::replace($content, '~\n\n+~', "\n\n");
+		$content = Strings::replace($content, '~\\n([\\t ]*\\n)+~', "\n\n");
+		$content = Helpers::strip($content);
 
 		return $content;
 	}
@@ -241,22 +246,30 @@ class Serializer
 				if ($argumentNode instanceof AST\Command && $argumentNode->getName() === 'bf') {
 					/** @var AST\Text $title */
 					$title = $it->getNextValue();
-					$el->addAttributes(['title' => $title->getValue()]);
+					$el->addAttributes(['title' => trim($title->getValue())]);
 					$it->next(); // skip title
 				}
 			}
 		}
-		echo $el->startTag();
+
+		ob_start();
 		$this->convertNodes($theorem->getBody());
-		echo $el->endTag();
+		$theoremContents = ob_get_clean();
+
+		echo $el->startTag(), "\n";
+		echo trim($theoremContents);
+		echo "\n", $el->endTag();
 	}
 
 	private function convertMathSection(AST\MathSection $section)
 	{
-		$sectionName = $section->getName()->getValue();
+		$outputName = $sectionName = $section->getName()->getValue();
+		if (array_key_exists($sectionName, $this->mathSectionReplacement)) {
+			$outputName = $this->mathSectionReplacement[$sectionName];
+		}
 
-		echo ":<math>\n";
-		echo '\begin{' . $sectionName . '}';
+		echo "\n:<math>\n";
+		echo '\begin{' . $outputName . '}';
 
 		if ($sectionName === 'tabular') {
 			/** @var AST\Text $argumentText */
@@ -266,7 +279,7 @@ class Serializer
 
 		$this->convertFormulae($section->getFormulae());
 
-		echo '\end{' . $sectionName . '}';
+		echo '\end{' . $outputName . '}';
 		echo "\n</math>\n";
 	}
 
@@ -281,6 +294,8 @@ class Serializer
 				return $this->convertSectionItemize($section);
 			case 'figure':
 				return $this->convertSectionFigure($section);
+			case 'thebibliography':
+				break; // no output
 			default:
 				throw new NotImplementedException((string) $section);
 		}
@@ -349,6 +364,7 @@ class Serializer
 	{
 		$rawFormulae = $formulae->getValue();
 		$rawFormulae = strtr($rawFormulae, $this->texMacros);
+		$rawFormulae = Strings::replace($rawFormulae, '~(?<!\\\\)\\$~', '');
 
 		echo $rawFormulae;
 	}

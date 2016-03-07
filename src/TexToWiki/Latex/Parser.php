@@ -219,6 +219,7 @@ class Parser
 	private function parseCommand(array $token) : AST\Command
 	{
 		$name = ltrim($token[Tokenizer::VALUE], '\\');
+		$lName = trim(strtolower($name));
 
 		$arguments = $outerOpen = [];
 		while ($this->stream->isNext(Tokenizer::TOKEN_BRACE_CURLY_LEFT, Tokenizer::TOKEN_BRACE_SQUARE_LEFT)) {
@@ -243,7 +244,6 @@ class Parser
 			$arguments[] = $argument;
 		}
 
-		$lName = trim(strtolower($name));
 		switch ($lName) {
 			case 'ms':
 			case 'medskip':

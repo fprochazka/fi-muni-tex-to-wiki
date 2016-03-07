@@ -29,7 +29,7 @@ class Command extends Node
 	 */
 	public function getArguments() : Collection
 	{
-		return $this->getChildren();
+		return $this->getChildren(self::filterByType(CommandArgument::class));
 	}
 
 	/**
@@ -37,7 +37,7 @@ class Command extends Node
 	 */
 	public function getFirstArgument()
 	{
-		return $this->getChildren()->first() ?: null;
+		return $this->getArguments()->first() ?: null;
 	}
 
 	/**
@@ -45,7 +45,7 @@ class Command extends Node
 	 */
 	public function getBody()
 	{
-		return $this->getChildren()->last() ?: null;
+		return $this->getArguments()->last() ?: null;
 	}
 
 	public function __toString()

@@ -86,7 +86,7 @@ abstract class Node
 		return true;
 	}
 
-	public static function filterByType(string ...$types)
+	public static function filterByType(string ...$types) : \Closure
 	{
 		return function (Node $node) use ($types) : bool {
 			foreach ($types as $type) {

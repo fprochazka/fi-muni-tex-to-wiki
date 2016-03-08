@@ -222,14 +222,15 @@ class Parser
 		$lName = trim(strtolower($name));
 
 		$arguments = $outerOpen = [];
-		while ($this->stream->isNext(Tokenizer::TOKEN_BRACE_CURLY_LEFT, Tokenizer::TOKEN_BRACE_SQUARE_LEFT)) {
+		while ($cursor = $this->stream->lookahead([Tokenizer::TOKEN_BRACE_CURLY_LEFT, Tokenizer::TOKEN_BRACE_SQUARE_LEFT], Tokenizer::TOKEN_WHITESPACE, Tokenizer::TOKEN_NEWLINE)) {
+			$this->stream->position = $cursor->position;
 			$open = $this->stream->nextToken();
 			if ($this->stream->isNext(Tokenizer::TOKEN_BRACE_CURLY_LEFT, Tokenizer::TOKEN_BRACE_SQUARE_LEFT)) {
 				$outerOpen = $open;
 				$open = $this->stream->nextToken();
 			}
 
-			$argument = $this->parseCommandArgument($open, str_replace('left', 'right', $open[Tokenizer::TYPE]));
+			$argument = $this->parseCommandArgument($open, str_replace('left', 'right', $open[Tokenizer::TYPE]), (bool) $outerOpen);
 
 			if ($outerOpen) {
 				$outerClose = str_replace('left', 'right', $outerOpen[Tokenizer::TYPE]);
@@ -259,6 +260,8 @@ class Parser
 				return new AST\Style\Italic($name, ...$arguments);
 			case 'fbox':
 				return new AST\Style\Border($name, ...$arguments);
+			case 'bibitem':
+				return new AST\BibiItem($name, ...$arguments);
 			case 'begin':
 			case 'end':
 				return new AST\SectionBoundary($name, ...$arguments);
@@ -267,13 +270,25 @@ class Parser
 		}
 	}
 
-	private function parseCommandArgument(array $open, string $closeType) : AST\CommandArgument
+	private function parseCommandArgument(array $open, string $closeType, bool $doubleWrapped) : AST\CommandArgument
 	{
 		$nodes = [];
 		while (!$this->stream->isNext($closeType)) {
 			$nodes[] = $this->parseNext();
 		}
 		$this->stream->nextToken(); // closing bracket
+
+		if ($doubleWrapped && count($nodes) >1) {
+			$firstNode = $nodes[0];
+			if ($firstNode instanceof AST\Command) {
+				if ($firstNode->getName() === 'bf') {
+					$nodes = [
+						new AST\Style\Bold($firstNode->getName(), new AST\CommandArgument(false, ...array_slice($nodes, 1))),
+					];
+				}
+			}
+		}
+
 		return new AST\CommandArgument($open[Tokenizer::TYPE] === Tokenizer::TOKEN_BRACE_SQUARE_LEFT, ...$nodes);
 	}
 

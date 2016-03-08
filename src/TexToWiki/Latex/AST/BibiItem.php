@@ -23,21 +23,26 @@ class BibiItem extends Command
 	/** @var CommandArgument|null */
 	private $bookPublisher;
 
-	public function __construct($name, array $children)
+	/** @var CommandArgument|null */
+	private $bookSource;
+
+	public function __construct($name, ...$children)
 	{
-		parent::__construct($name, $children);
+		parent::__construct($name, ...$children);
 
-		$this->refName = $this->getFirstArgument();
+		$this->refName = $this->getArguments()->get(0);
+		$this->bookAuthor = $this->getArguments()->get(1);
+		$this->bookName = $this->getArguments()->get(2);
+		$this->bookPublisher = $this->getArguments()->get(3);
+		$this->bookSource = $this->getArguments()->get(4);
+	}
 
-		$this->book = $this->getChildren(self::filterByType(Command::class))
-			->filter(self::filterByName('mciteb'))
-			->first() ?: null;
-
-		if ($this->book !== null) {
-			$this->bookAuthor = $this->book->getArguments()->get(0);
-			$this->bookName = $this->book->getArguments()->get(1);
-			$this->bookPublisher = $this->book->getArguments()->get(2);
-		}
+	/**
+	 * @return \TexToWiki\Latex\AST\Text|null
+	 */
+	public function getRefName()
+	{
+		return $this->refName ? $this->refName->getFirstValue() : null;
 	}
 
 	/**
@@ -70,6 +75,21 @@ class BibiItem extends Command
 	public function getBookPublisher()
 	{
 		return $this->bookPublisher;
+	}
+
+	/**
+	 * @return null|CommandArgument
+	 */
+	public function getBookSource()
+	{
+		return $this->bookSource;
+	}
+
+	public static function filterByName(string ...$names) : \Closure
+	{
+		return function (BibiItem $node) use ($names) : bool {
+			return in_array($node->getRefName()->getValue(), $names, true);
+		};
 	}
 
 }

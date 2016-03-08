@@ -2,9 +2,10 @@
 
 namespace TexToWiki\Mediawiki;
 
-use Nette\Iterators\CachingIterator;
+use Nette\Utils\ArrayHash;
 use Nette\Utils\Html;
 use Nette\Utils\Strings;
+use TexToWiki\InvalidArgumentException;
 use TexToWiki\Latex\AST;
 use TexToWiki\NotImplementedException;
 
@@ -22,17 +23,76 @@ class Serializer
 		'\\Ibb' => '\\I',
 		'\\Qbb' => '\\Q',
 		'\\Dbb' => '\\D',
+		'\\D' => '\\mathcal{D}',
+		'\\H' => '\\mathcal{H}',
+		'\\L' => '\\mathcal{L}',
+		'\\R' => '\\mathcal{R}',
+		'\\P' => '\\mathcal{P}',
+		'\\text\\{\\scriptsize' => '\\LARGE{',
+		'\\st' => '\\operatorname{\\textrm{st}}',
+		'\\sgn' => '\\operatorname{\\textrm{sgn}}',
+		'\\tg' => '\\operatorname{\\textrm{tg}}',
+		'\\cotg' => '\\operatorname{\\textrm{cotg}}',
+		'\\arctg' => '\\operatorname{\\textrm{arctg}}',
+		'\\arccotg' => '\\operatorname{\\textrm{arccotg}}',
+		'\\Gr' => '\\operatorname{\\textrm{Gr}}',
+		'\\Eigen' => '\\operatorname{\\textrm{Eigen}}',
+		'\\ul' => '\\underline',
+		'\\eps' => '\\varepsilon',
+		'\\dx' => '\\mathrm{d}x',
+		'\\e' => '\\mathrm{e}',
+		'\\la' => '\\lambda',
+		'\\al' => '\\alpha',
+		'\\be' => '\\beta',
+		'\\ps' => '\\psi',
+		'\\De' => '\\Delta',
 	];
+
+	public $texCallbacks = [];
 
 	public $mathSectionReplacement = [
 		'tabular' => 'array',
 	];
 
+	/** @var AST\Document */
+	private $document;
+
+	/** @var \ArrayObject[]|string[][]  */
+	private $citationsStack = [];
+
+	public function __construct()
+	{
+		$this->texCallbacks[] = new LatexMacroExpansion('mdet', 1, LatexMacroExpansion::mask('\left|\,\begin{matrix} {#1} \end{matrix}\,\right|'));
+		$this->texCallbacks[] = new LatexMacroExpansion('mmatrix', 1, LatexMacroExpansion::mask('\left(\begin{matrix} {#1} \end{matrix}\right)'));
+		$this->texCallbacks[] = new LatexMacroExpansion('bigseq', 3, LatexMacroExpansion::mask('\big\{{#1}\big\}_{{#2}={#3}}^\infty'));
+		$this->texCallbacks[] = new LatexMacroExpansion('bigtyp', 1, LatexMacroExpansion::mask('\quad\big| \text{ typ } #1\ \big|'));
+		$this->texCallbacks[] = new LatexMacroExpansion('biggtyp', 1, LatexMacroExpansion::mask('\quad\bigg| \text{ typ } #1\ \bigg|'));
+		$this->texCallbacks[] = new LatexMacroExpansion('perpartes', 4, LatexMacroExpansion::mask("\\quad\\bigg| \\begin{array}{ll}\n  u'={#1} \\quad & u={#2} \\\\\n  v={#3} \\quad & v'={#4}\n\\end{array} \\bigg|"));
+		$this->texCallbacks[] = new LatexMacroExpansion('substituce', 2, LatexMacroExpansion::mask('\quad\left| \begin{array}{l} #1 \\\\ #2 \end{array}\ \right|'));
+		$this->texCallbacks[] = new LatexMacroExpansion('lowint', 2, LatexMacroExpansion::mask('{\ul{\int}}_{\,\,#1}^{\,\,#2}'));
+		$this->texCallbacks[] = new LatexMacroExpansion('upint', 2, LatexMacroExpansion::mask('{\overline{\int}}_{\!\!\!#1}^{\,\,\,#2}'));
+		$this->texCallbacks[] = new LatexMacroExpansion('bigmeze', 3, LatexMacroExpansion::mask('\big[\,{#1}\,\big]_{{#2}}^{{#3}}'));
+		$this->texCallbacks[] = new LatexMacroExpansion('biggmeze', 3, LatexMacroExpansion::mask('\bigg[\,{#1}\,\bigg]_{{#2}}^{{#3}}'));
+		$this->texCallbacks[] = new LatexMacroExpansion('rada', 3, LatexMacroExpansion::mask('\sum_{{#2}={#3}}^\infty {#1}'));
+		$this->texCallbacks[] = new LatexMacroExpansion('mathbox', 1, LatexMacroExpansion::mask('\fbox{$\displaystyle \, {#1} \, $}\,'));
+		$this->texCallbacks[] = new LatexMacroExpansion('qtextq', 1, LatexMacroExpansion::mask('\quad\text{ {#1} }\quad'));
+		$this->texCallbacks[] = new LatexMacroExpansion('qqtextqq', 1, LatexMacroExpansion::mask('\qquad\text{ {#1} }\qquad'));
+	}
+
 	public function convert(AST\Document $document) : \Generator
 	{
-		foreach ($document->getSections() as $section) {
-			$name = $section->getName()->getValue();
-			yield $name => $this->convertTocSection($section);
+		Html::$xhtml = true;
+
+		try {
+			$this->document = $document;
+			foreach ($document->getSections() as $section) {
+				$name = $section->getName()->getValue();
+				yield $name => $this->convertTocSection($section);
+			}
+
+		} finally {
+			$this->document = null;
+			$this->citationsStack = [];
 		}
 	}
 
@@ -41,11 +101,15 @@ class Serializer
 		ob_start();
 
 		echo '# ', $section->getName()->getValue(), "\n\n";
+		$this->citationsStack[] = new ArrayHash();
 		$this->convertNodeChildren($section);
+		$this->convertReferences(array_pop($this->citationsStack));
 
 		$content = ob_get_clean();
 		$content = Strings::replace($content, '~\\n([\\t ]*\\n)+~', "\n\n");
-		$content = Helpers::strip($content);
+		$content = Helpers::ltrimPerLine($content);
+		$content = Helpers::removeAmbigouseNewlines($content);
+		$content = Strings::replace($content, '~(?<!\\n)(\\:\\<math\\>)~', "\n\$1");
 
 		return $content;
 	}
@@ -53,7 +117,9 @@ class Serializer
 	private function convertTocSubSection(AST\Toc\SubSection $subSection)
 	{
 		echo '## ', $subSection->getName()->getValue(), "\n\n";
+		$this->citationsStack[] = new ArrayHash();
 		$this->convertNodeChildren($subSection);
+		$this->convertReferences(array_pop($this->citationsStack));
 	}
 
 	private function convertNodeChildren(AST\Node $node)
@@ -114,7 +180,10 @@ class Serializer
 
 	private function convertText(AST\Text $text)
 	{
-		echo $text->getValue();
+		$rawText = $text->getValue();
+		$rawText = str_replace('--', '&ndash;', $rawText);
+
+		echo $rawText;
 	}
 
 	private function convertNewParagraph(AST\Style\NewParagraph $paragraph)
@@ -124,12 +193,17 @@ class Serializer
 
 	private function convertMath(AST\Math $math)
 	{
-		if (!$math->isInline()) {
+		ob_start();
+		$this->convertFormulae($math->getFormulae());
+		$formulae = ob_get_clean();
+
+		if ($math->isInline()) {
+			$formulae = str_replace("\n", ' ', $formulae);
+
+		} else {
 			echo "\n:";
 		}
-		echo '<math>';
-		$this->convertFormulae($math->getFormulae());
-		echo '</math>';
+		echo '<math>', $formulae, '</math>';
 		if (!$math->isInline()) {
 			echo "\n";
 		}
@@ -189,8 +263,7 @@ class Serializer
 				echo '...';
 				break;
 			case 'cite':
-				// todo
-				break;
+				return $this->convertCommandCite($command);
 			case 'eqref':
 			case 'ref':
 				// todo
@@ -207,19 +280,42 @@ class Serializer
 		}
 	}
 
-	private function convertCommandHref(AST\Command $command)
+	private function convertCommandHref(AST\Command $href)
 	{
 		/** @var AST\CommandArgument $link */
 		/** @var AST\CommandArgument $title */
-		list($link, $title) = $command->getArguments()->toArray();
+		list($link, $title) = $href->getArguments()->toArray();
 		echo '[', $link->getFirstValue()->getValue(), ' ', $title->getFirstValue()->getValue(), ']';
 	}
 
-	private function convertCommandUrl(AST\Command $command)
+	private function convertCommandUrl(AST\Command $url)
 	{
 		/** @var AST\CommandArgument $link */
-		$link = $command->getArguments()->first();
-		echo '[', $link->getFirstValue()->getValue(), ']';
+		$link = $url->getArguments()->first();
+		$linkValue = $link->getFirstValue()->getValue();
+		echo '[', $linkValue, ' ', $linkValue, ']';
+	}
+
+	private function convertCommandCite(AST\Command $cite)
+	{
+		$name = $cite->getBody()->getFirstValue()->getValue();
+
+		/** @var \ArrayObject $level */
+		$level = end($this->citationsStack);
+		$level[$name] = true;
+
+		$refTag = Html::el()
+			->setName('ref', true)
+			->addAttributes(['name' => $name]);
+		if ($cite->getArguments()->count() === 1) {
+			echo $refTag;
+
+		} else {
+			ob_start();
+			$this->convertNodeChildren($cite->getFirstArgument());
+			$title = ob_get_clean();
+			echo '[<nowiki />', $refTag, ', ', $title, ']';
+		}
 	}
 
 	private function convertCommandCaption(AST\Command $caption)
@@ -241,15 +337,17 @@ class Serializer
 	private function convertTheorem(AST\Theorem\Theorem $theorem)
 	{
 		$el = Html::el($theorem::NAME);
-		foreach ($theorem->getArguments() as $argument) {
-			foreach ($it = new CachingIterator($argument->getChildren()) as $argumentNode) {
-				if ($argumentNode instanceof AST\Command && $argumentNode->getName() === 'bf') {
-					/** @var AST\Text $title */
-					$title = $it->getNextValue();
-					$el->addAttributes(['title' => trim($title->getValue())]);
-					$it->next(); // skip title
-				}
-			}
+
+		/** @var AST\Style\Bold $boldTitle */
+		$boldTitle = $theorem->getChildrenRecursive(AST\Node::filterByType(AST\Command::class))
+			->filter(AST\Command::filterByName('bf'))
+			->first() ?: null;
+		if ($boldTitle) {
+			$el->addAttributes(['title' => trim($boldTitle->getFirstArgument()->getFirstValue()->getValue())]);
+
+		} elseif (($title = $theorem->getArguments()->get(1)) && $title->isOptional()) {
+			/** @var AST\CommandArgument $title */
+			$el->addAttributes(['title' => trim($title->getFirstValue()->getValue())]);
 		}
 
 		ob_start();
@@ -363,10 +461,68 @@ class Serializer
 	private function convertFormulae(AST\Text $formulae)
 	{
 		$rawFormulae = $formulae->getValue();
-		$rawFormulae = strtr($rawFormulae, $this->texMacros);
 		$rawFormulae = Strings::replace($rawFormulae, '~(?<!\\\\)\\$~', '');
 
+		foreach ($this->texCallbacks as $callback) {
+			$rawFormulae = $callback($rawFormulae);
+		}
+
+		foreach ($this->texMacros as $macro => $replacement) {
+			$rawFormulae = Strings::replace($rawFormulae, '~' . preg_quote($macro) . '(?![a-zA-Z0-9])~', $replacement);
+		}
+
 		echo $rawFormulae;
+	}
+
+	private function convertReferences(\Traversable $refNames)
+	{
+		if (!iterator_count($refNames)) {
+			return;
+		}
+
+		echo '== Reference ==', "\n";
+		echo '<references>', "\n";
+		foreach ($refNames as $name => $_) {
+			$this->convertReference($name);
+		}
+		echo '</references>', "\n\n";
+	}
+
+	private function convertReference($name)
+	{
+		/** @var AST\BibiItem $reference */
+		$reference = $this->document->getBibiItems()
+			->filter(AST\BibiItem::filterByName($name))
+			->first() ?: null;
+
+		if (!$reference) {
+			throw new InvalidArgumentException(sprintf('Missing reference %s', $name));
+		}
+
+		$el = Html::el('ref')->addAttributes(['name' => $name]);
+		$content = [];
+		if ($author = $reference->getBookAuthor()) {
+			ob_start();
+			$this->convertNodeChildren($author);
+			$content[] = ob_get_clean();
+		}
+		if ($publicationName = $reference->getBookName()) {
+			ob_start();
+			$this->convertNodeChildren($publicationName);
+			$content[] = "''" . ob_get_clean() . "''";
+		}
+		if ($publisher = $reference->getBookPublisher()) {
+			ob_start();
+			$this->convertNodeChildren($publisher);
+			$content[] = ob_get_clean();
+		}
+		if ($source = $reference->getBookSource()) {
+			ob_start();
+			$this->convertNodeChildren($source);
+			$content[] = ob_get_clean();
+		}
+
+		echo $el->add(rtrim(implode(', ', $content), '.') . '.'), "\n";
 	}
 
 }

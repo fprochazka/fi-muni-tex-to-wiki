@@ -19,4 +19,27 @@ class TokenIterator extends NTokenIterator
 		return new TokenIterator(array_values($tokens));
 	}
 
+	/**
+	 * @param string|string[] $lookingFor
+	 * @param array ...$ignore
+	 * @return \TexToWiki\Latex\TokenIterator|null
+	 */
+	public function lookahead($lookingFor, ...$ignore)
+	{
+		$copy = clone $this;
+		while ($copy->isNext(...$ignore)) {
+			$copy->nextToken();
+		}
+		$lookingFor = is_array($lookingFor) ? $lookingFor : [$lookingFor];
+		return $copy->isNext(...$lookingFor) ? $copy : null;
+	}
+
+	public function slice(int $offset, int $length) : TokenIterator
+	{
+		$copy = clone $this;
+		$copy->tokens = array_slice($copy->tokens, $offset, $length);
+		$copy->position = -1;
+		return $copy;
+	}
+
 }

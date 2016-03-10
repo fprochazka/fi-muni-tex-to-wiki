@@ -3,6 +3,7 @@
 namespace TexToWiki\Latex;
 
 use Nette\Utils\Strings;
+use TexToWiki\InvalidStateException;
 use TexToWiki\Latex\AST;
 
 /**
@@ -65,6 +66,8 @@ class Parser
 			case Tokenizer::TOKEN_MATH_INLINE:
 			case Tokenizer::TOKEN_MATH_BLOCK:
 				return $this->parseMath($token);
+			case Tokenizer::TOKEN_BRACE_CURLY_LEFT:
+				return $this->parseScope($token);
 			default:
 				return $this->parseText($token);
 		}
@@ -92,6 +95,26 @@ class Parser
 		}
 
 		return new AST\Text(str_replace('~', ' ', $text));
+	}
+
+	private function parseScope(array $token) : AST\Node
+	{
+		if (!$this->stream->isNext(Tokenizer::TOKEN_COMMAND)) {
+			return new AST\Text($token[Tokenizer::VALUE]);
+		}
+
+		$command = $this->parseCommand($this->stream->nextToken());
+		if ($command->getChildren()->count()) {
+			throw new InvalidStateException('Unexpected command arguments');
+		}
+
+		$body = [];
+		while (!$this->stream->isNext(Tokenizer::TOKEN_BRACE_CURLY_RIGHT)) {
+			$body[] = $this->parseNext();
+		}
+		$this->stream->nextToken(); // eat right bracket
+
+		return $this->createCommand($command->getName(), [new AST\CommandArgument(false, ...$body)]);
 	}
 
 	private function parseTocSection(array $token) : AST\Toc\Section
@@ -219,33 +242,20 @@ class Parser
 	private function parseCommand(array $token) : AST\Command
 	{
 		$name = ltrim($token[Tokenizer::VALUE], '\\');
-		$lName = trim(strtolower($name));
 
 		$arguments = $outerOpen = [];
 		while ($cursor = $this->stream->lookahead([Tokenizer::TOKEN_BRACE_CURLY_LEFT, Tokenizer::TOKEN_BRACE_SQUARE_LEFT], Tokenizer::TOKEN_WHITESPACE, Tokenizer::TOKEN_NEWLINE)) {
 			$this->stream->position = $cursor->position;
 			$open = $this->stream->nextToken();
-			if ($this->stream->isNext(Tokenizer::TOKEN_BRACE_CURLY_LEFT, Tokenizer::TOKEN_BRACE_SQUARE_LEFT)) {
-				$outerOpen = $open;
-				$open = $this->stream->nextToken();
-			}
-
-			$argument = $this->parseCommandArgument($open, str_replace('left', 'right', $open[Tokenizer::TYPE]), (bool) $outerOpen);
-
-			if ($outerOpen) {
-				$outerClose = str_replace('left', 'right', $outerOpen[Tokenizer::TYPE]);
-				if (!$this->stream->isNext($outerClose)) {
-					throw new UnexpectedTokenException($this->stream->nextToken(), $outerClose);
-				}
-				$this->stream->nextToken(); // eat the bracket
-				// $argument = new AST\Brackets($argument, $outerOpen[Tokenizer::TYPE] === Tokenizer::TOKEN_BRACE_SQUARE_LEFT); // todo?
-				$outerOpen = [];
-			}
-
-			$arguments[] = $argument;
+			$arguments[] = $this->parseCommandArgument($open, str_replace('left', 'right', $open[Tokenizer::TYPE]));
 		}
 
-		switch ($lName) {
+		return $this->createCommand($name, $arguments);
+	}
+
+	private function createCommand(string $name, array $arguments)
+	{
+		switch ($name) {
 			case 'ms':
 			case 'medskip':
 			case 'smallskip':
@@ -256,6 +266,8 @@ class Parser
 				return new AST\Style\TypographicQuote($name, ...$arguments);
 			case 'ul':
 				return new AST\Style\Underlined($name, ...$arguments);
+			case 'bf':
+				return new AST\Style\Bold($name, ...$arguments);
 			case 'textit':
 				return new AST\Style\Italic($name, ...$arguments);
 			case 'fbox':
@@ -270,24 +282,13 @@ class Parser
 		}
 	}
 
-	private function parseCommandArgument(array $open, string $closeType, bool $doubleWrapped) : AST\CommandArgument
+	private function parseCommandArgument(array $open, string $closeType) : AST\CommandArgument
 	{
 		$nodes = [];
 		while (!$this->stream->isNext($closeType)) {
 			$nodes[] = $this->parseNext();
 		}
 		$this->stream->nextToken(); // closing bracket
-
-		if ($doubleWrapped && count($nodes) >1) {
-			$firstNode = $nodes[0];
-			if ($firstNode instanceof AST\Command) {
-				if ($firstNode->getName() === 'bf') {
-					$nodes = [
-						new AST\Style\Bold($firstNode->getName(), new AST\CommandArgument(false, ...array_slice($nodes, 1))),
-					];
-				}
-			}
-		}
 
 		return new AST\CommandArgument($open[Tokenizer::TYPE] === Tokenizer::TOKEN_BRACE_SQUARE_LEFT, ...$nodes);
 	}

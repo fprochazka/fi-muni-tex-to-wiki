@@ -77,8 +77,12 @@ class Serializer
 		$this->convertReferences(array_pop($this->citationsStack));
 	}
 
-	private function convertNodeChildren(AST\Node $node)
+	private function convertNodeChildren(AST\Node $node = null)
 	{
+		if ($node === null) {
+			return;
+		}
+
 		$this->convertNodes($node->getChildren());
 	}
 
@@ -208,7 +212,9 @@ class Serializer
 				// ignore alltogether
 				break;
 			case 'tt':
-				// ignore typeface
+			case 'rm':
+				// typeface
+				$this->convertNodeChildren($command->getBody());
 				break;
 			case 'href':
 				return $this->convertCommandHref($command);
@@ -270,6 +276,11 @@ class Serializer
 			$title = ob_get_clean();
 			echo '[<nowiki />', $refTag, ', ', $title, ']';
 		}
+	}
+
+	private function convertCommandRef(AST\Command $caption)
+	{
+//		echo "[ref]"; // ignore for now
 	}
 
 	private function convertCommandCaption(AST\Command $caption)

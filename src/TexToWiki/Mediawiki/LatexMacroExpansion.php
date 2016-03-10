@@ -3,9 +3,10 @@
 namespace TexToWiki\Mediawiki;
 
 use Nette\Utils\Strings;
-use Nette\Utils\Tokenizer;
 use TexToWiki\InvalidArgumentException;
+use TexToWiki\InvalidStateException;
 use TexToWiki\Latex\TokenIterator;
+use TexToWiki\Latex\Tokenizer;
 
 /**
  * @author Filip Procházka <filip@prochazka.su>
@@ -13,120 +14,185 @@ use TexToWiki\Latex\TokenIterator;
 class LatexMacroExpansion
 {
 
-	/** @var string */
-	private $name;
+	const TOKEN_REDUCED = 't_reduced';
 
-	/** @var int */
-	private $argumentsCount;
+	/** @var array */
+	private $macros = [];
 
-	/** @var \Closure */
-	private $handler;
+	/** @var string[] */
+	private $context;
 
-	public function __construct(string $name, int $argumentsCount, \Closure $handler)
+	/** @var Tokenizer */
+	private $tokenizer;
+
+	public function __construct()
 	{
-		$this->name = $name;
-		$this->argumentsCount = $argumentsCount;
-		$this->handler = $handler;
+		$this->tokenizer = new Tokenizer();
 	}
 
-	public function getName() : string
+	public function addMacroReplacements(array $map)
 	{
-		return $this->name;
-	}
-
-	public function getArgumentsCount() : int
-	{
-		return $this->argumentsCount;
-	}
-
-	public function __invoke(string $latex)
-	{
-		if (!Strings::match($latex, '~' . preg_quote('\\' . $this->name) . '(?![a-zA-Z0-9])~')) {
-			return $latex;
+		foreach ($map as $name => $replacement) {
+			$this->addMacroReplacement($name, $replacement);
 		}
-
-		return $this->expand($this->tokenize($latex));
+		return $this;
 	}
 
-	private function tokenize(string $latex)
+	public function addMacroReplacement(string $name, string $replacement) : self
 	{
-		$tokenizer = new Tokenizer([
-			'command' => '(?:(?<!\\\\)|^)\\\\[a-z0-9]+',
-//			'brace_left' => '(?:\\{|\\[)',
-			'brace_left' => '(?:\\{)',
-//			'brace_right' => '(?:\\}|\\])',
-			'brace_right' => '(?:\\})',
-			'backslash' => '\\\\+',
-			'whitespace' => '[\\n\\r\\t ]+',
-			'other' => '[^' . preg_quote('{}\\', '~') . '\\s]+', // []
-		], 'i');
-		return new TokenIterator($tokenizer->tokenize($latex));
+		$this->macros[$name] = (object) [
+			'arguments' => 0,
+			'handler' => function () use ($replacement) : string {
+				return '\\' . $replacement;
+			},
+		];
+		return $this;
 	}
 
-	private function expand(TokenIterator $stream) : string
+	public function addMacroHandler(string $name, int $argumentsCount, \Closure $handler) : self
 	{
-		$begin = $argumentBegin = false;
-		$braces = $arguments = [];
-		while ($token = $stream->nextToken()) {
-			if ($begin === false) {
-				if ($token[Tokenizer::TYPE] !== 'command' || $stream->currentValue() !== '\\' . $this->name) {
-					continue;
-				}
-				$begin = $stream->position;
-				$argumentBegin = false;
-				continue;
-			}
+		$this->macros[$name] = (object) [
+			'arguments' => $argumentsCount,
+			'handler' => $handler,
+		];
+		return $this;
+	}
 
-			if ($token[Tokenizer::TYPE] === 'brace_left') {
-				$braces[] = $token[Tokenizer::VALUE];
-				if (count($braces) === 1) {
-					$argumentBegin = $stream->position + 1;
-				}
-				continue;
-
-			} elseif ($token[Tokenizer::TYPE] === 'brace_right') {
-				$pair = array_pop($braces);
-				if (($pair === '{' && $token[Tokenizer::VALUE] !== '}') || ($pair === '[' && $token[Tokenizer::VALUE] !== ']')) {
-					throw new InvalidArgumentException('braces do not match');
-				}
-
-				if (count($braces) !== 0) {
-					continue;
-				}
-
-				$arguments[] = $this->expand($stream->slice($argumentBegin, $stream->position - $argumentBegin));
-				$argumentBegin = false;
-
-				if (count($arguments) === $this->argumentsCount) {
-					$replacement = call_user_func_array($this->handler, $arguments);
-					$arguments = [];
-					$stream->tokens = array_values(array_merge(
-							array_slice($stream->tokens, 0, $begin),
-							[[
-								Tokenizer::VALUE => $replacement,
-								Tokenizer::OFFSET => -1,
-								Tokenizer::TYPE => 'replacement',
-							]],
-							array_slice($stream->tokens, $stream->position + 1)
-						)
-					);
-					$stream->position = $begin;
-					$begin = false;
-				}
-			}
+	public function expand(string $latex)
+	{
+		$this->context = [];
+		$stream = $this->tokenizer->tokenize($latex);
+		while ($stream->isNext()) {
+			$this->reduceNext($stream);
 		}
 
 		return self::streamToString($stream);
 	}
 
-	private static function streamToString(TokenIterator $stream) : string
+	private function reduceNext(TokenIterator $stream)
 	{
-		$result = '';
-		foreach ($stream->tokens as $token) {
-			$result .= $token[Tokenizer::VALUE];
+		$token = $stream->nextToken();
+		switch ($token[Tokenizer::TYPE]) {
+			case Tokenizer::TOKEN_COMMAND_BEGIN:
+			case Tokenizer::TOKEN_COMMAND_END:
+			case Tokenizer::TOKEN_COMMAND_SECTION:
+			case Tokenizer::TOKEN_COMMAND_SUBSECTION:
+			case Tokenizer::TOKEN_COMMAND:
+				return $this->reduceCommand($stream, $token);
+			case Tokenizer::TOKEN_BRACE_CURLY_LEFT:
+				return $this->reduceScope($stream, $token);
+			case Tokenizer::TOKEN_MATH_BLOCK:
+			case Tokenizer::TOKEN_MATH_INLINE:
+				return $this->reduceMath($stream, $token);
+		}
+	}
+
+	private function reduceCommand(TokenIterator $stream, array $beginToken)
+	{
+		$name = substr($beginToken[Tokenizer::VALUE], 1);
+		$beginPosition = $stream->position;
+
+		try {
+			$this->context[] = $name;
+			$arguments = $this->reduceCommandArguments($stream, $name);
+
+			if (array_key_exists($name, $this->macros)) {
+				$macro = $this->macros[$name];
+				if ($macro->arguments !== count($arguments)) {
+					throw new InvalidArgumentException;
+				}
+				$replacement = call_user_func_array($macro->handler, $arguments);
+
+			} else {
+				$replacement = self::streamToString($stream, $beginPosition, $stream->position + 1);
+			}
+
+			$reduced = self::reduceRange($stream, $replacement, $beginPosition, $stream->position + 1);
+			$stream->tokens = $reduced->tokens;
+			$stream->position = $reduced->position;
+
+		} finally {
+			array_pop($this->context);
+		}
+	}
+
+	private function reduceCommandArguments(TokenIterator $stream, string $name) : array
+	{
+		$expectedArguments = array_key_exists($name, $this->macros)
+			? $this->macros[$name]->arguments
+			: NULL;
+
+		if ($expectedArguments === 0) {
+			return [];
 		}
 
-		return $result;
+		$lookForBraces = [Tokenizer::TOKEN_BRACE_CURLY_LEFT];
+		if ($expectedArguments !== null) {
+			$lookForBraces[] = Tokenizer::TOKEN_BRACE_SQUARE_LEFT;
+		}
+
+		$arguments = [];
+		while ($cursor = $stream->lookahead($lookForBraces, Tokenizer::TOKEN_WHITESPACE, Tokenizer::TOKEN_NEWLINE)) {
+			$stream->position = $cursor->position;
+			$arguments[] = $this->reduceScope($stream, $stream->nextToken());
+
+			if ($expectedArguments !== null && $expectedArguments === count($arguments)) {
+				break;
+			}
+		}
+
+		return $arguments;
+	}
+
+	private function reduceScope(TokenIterator $stream, array $begin) : string
+	{
+		$beginPosition = $stream->position;
+		while (!$stream->isNext(str_replace('left', 'right', $begin[Tokenizer::TYPE]))) {
+			if (!$stream->isNext()) {
+				throw new InvalidStateException;
+			}
+			$this->reduceNext($stream);
+		}
+
+		$stream->nextToken(); // skip brace
+		$content = self::streamToString($stream, $beginPosition + 1, $stream->position);
+		$replacement = self::streamToString($stream, $beginPosition, $stream->position + 1);
+
+		$reduced = self::reduceRange($stream, $replacement, $beginPosition, $stream->position + 1);
+		$stream->tokens = $reduced->tokens;
+		$stream->position = $reduced->position;
+
+		return $content;
+	}
+
+	private function reduceMath(TokenIterator $stream, array $token)
+	{
+		if (in_array('text', $this->context, true) || in_array('fbox', $this->context, true)) {
+			return; // ignore
+		}
+
+		unset($stream->tokens[$stream->position]);
+		$stream->tokens = array_values($stream->tokens); // reset numbering
+		$stream->position--;
+	}
+
+	private static function reduceRange(TokenIterator $stream, string $replacement, int $begin, int $end, array $meta = []) : TokenIterator
+	{
+		$copy = clone $stream;
+		$copy->tokens = array_values(array_merge(
+				array_slice($stream->tokens, 0, $begin),
+				[
+					[
+						Tokenizer::VALUE => $replacement,
+						Tokenizer::OFFSET => $stream->tokens[$begin][Tokenizer::OFFSET],
+						Tokenizer::TYPE => self::TOKEN_REDUCED,
+					],
+				],
+				array_slice($stream->tokens, $end)
+			)
+		);
+		$copy->position = $begin;
+		return $copy;
 	}
 
 	public static function mask(string $mask)
@@ -136,6 +202,17 @@ class LatexMacroExpansion
 				return $args[$m['n'] - 1];
 			});
 		};
+	}
+
+	private static function streamToString(TokenIterator $stream, int $offset = null, int $stop = null) : string
+	{
+		$result = '';
+		$end = $stop ?? count($stream->tokens);
+		for ($i = ($offset ?? 0); $i < $end ;$i++) {
+			$result .= $stream->tokens[$i][Tokenizer::VALUE];
+		}
+
+		return $result;
 	}
 
 }

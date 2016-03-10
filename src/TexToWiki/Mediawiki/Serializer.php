@@ -15,41 +15,10 @@ use TexToWiki\NotImplementedException;
 class Serializer
 {
 
-	public $texMacros = [
-		'\\Rbb' => '\\R',
-		'\\Zbb' => '\\Z',
-		'\\Nbb' => '\\N',
-		'\\Cbb' => '\\C',
-		'\\Ibb' => '\\I',
-		'\\Qbb' => '\\Q',
-		'\\Dbb' => '\\D',
-		'\\D' => '\\mathcal{D}',
-		'\\H' => '\\mathcal{H}',
-		'\\L' => '\\mathcal{L}',
-		'\\R' => '\\mathcal{R}',
-		'\\P' => '\\mathcal{P}',
-		'\\text\\{\\scriptsize' => '\\LARGE{',
-		'\\st' => '\\operatorname{\\textrm{st}}',
-		'\\sgn' => '\\operatorname{\\textrm{sgn}}',
-		'\\tg' => '\\operatorname{\\textrm{tg}}',
-		'\\cotg' => '\\operatorname{\\textrm{cotg}}',
-		'\\arctg' => '\\operatorname{\\textrm{arctg}}',
-		'\\arccotg' => '\\operatorname{\\textrm{arccotg}}',
-		'\\Gr' => '\\operatorname{\\textrm{Gr}}',
-		'\\Eigen' => '\\operatorname{\\textrm{Eigen}}',
-		'\\ul' => '\\underline',
-		'\\eps' => '\\varepsilon',
-		'\\dx' => '\\mathrm{d}x',
-		'\\e' => '\\mathrm{e}',
-		'\\la' => '\\lambda',
-		'\\al' => '\\alpha',
-		'\\be' => '\\beta',
-		'\\ps' => '\\psi',
-		'\\De' => '\\Delta',
-	];
+	/** @var LatexMacroExpansion */
+	public $macrosExpansion;
 
-	public $texCallbacks = [];
-
+	/** @var array  */
 	public $mathSectionReplacement = [
 		'tabular' => 'array',
 	];
@@ -62,21 +31,7 @@ class Serializer
 
 	public function __construct()
 	{
-		$this->texCallbacks[] = new LatexMacroExpansion('mdet', 1, LatexMacroExpansion::mask('\left|\,\begin{matrix} {#1} \end{matrix}\,\right|'));
-		$this->texCallbacks[] = new LatexMacroExpansion('mmatrix', 1, LatexMacroExpansion::mask('\left(\begin{matrix} {#1} \end{matrix}\right)'));
-		$this->texCallbacks[] = new LatexMacroExpansion('bigseq', 3, LatexMacroExpansion::mask('\big\{{#1}\big\}_{{#2}={#3}}^\infty'));
-		$this->texCallbacks[] = new LatexMacroExpansion('bigtyp', 1, LatexMacroExpansion::mask('\quad\big| \text{ typ } #1\ \big|'));
-		$this->texCallbacks[] = new LatexMacroExpansion('biggtyp', 1, LatexMacroExpansion::mask('\quad\bigg| \text{ typ } #1\ \bigg|'));
-		$this->texCallbacks[] = new LatexMacroExpansion('perpartes', 4, LatexMacroExpansion::mask("\\quad\\bigg| \\begin{array}{ll}\n  u'={#1} \\quad & u={#2} \\\\\n  v={#3} \\quad & v'={#4}\n\\end{array} \\bigg|"));
-		$this->texCallbacks[] = new LatexMacroExpansion('substituce', 2, LatexMacroExpansion::mask('\quad\left| \begin{array}{l} #1 \\\\ #2 \end{array}\ \right|'));
-		$this->texCallbacks[] = new LatexMacroExpansion('lowint', 2, LatexMacroExpansion::mask('{\ul{\int}}_{\,\,#1}^{\,\,#2}'));
-		$this->texCallbacks[] = new LatexMacroExpansion('upint', 2, LatexMacroExpansion::mask('{\overline{\int}}_{\!\!\!#1}^{\,\,\,#2}'));
-		$this->texCallbacks[] = new LatexMacroExpansion('bigmeze', 3, LatexMacroExpansion::mask('\big[\,{#1}\,\big]_{{#2}}^{{#3}}'));
-		$this->texCallbacks[] = new LatexMacroExpansion('biggmeze', 3, LatexMacroExpansion::mask('\bigg[\,{#1}\,\bigg]_{{#2}}^{{#3}}'));
-		$this->texCallbacks[] = new LatexMacroExpansion('rada', 3, LatexMacroExpansion::mask('\sum_{{#2}={#3}}^\infty {#1}'));
-		$this->texCallbacks[] = new LatexMacroExpansion('mathbox', 1, LatexMacroExpansion::mask('\fbox{$\displaystyle \, {#1} \, $}\,'));
-		$this->texCallbacks[] = new LatexMacroExpansion('qtextq', 1, LatexMacroExpansion::mask('\quad\text{ {#1} }\quad'));
-		$this->texCallbacks[] = new LatexMacroExpansion('qqtextqq', 1, LatexMacroExpansion::mask('\qquad\text{ {#1} }\qquad'));
+		$this->macrosExpansion = Configurator::configureMB102();
 	}
 
 	public function convert(AST\Document $document) : \Generator
@@ -266,8 +221,7 @@ class Serializer
 				return $this->convertCommandCite($command);
 			case 'eqref':
 			case 'ref':
-				// todo
-				break;
+				return $this->convertCommandRef($command);
 			case 'reseni':
 				return $this->convertTheorem(AST\Theorem\Solution::fromCommand($command));
 			case 'centerline':
@@ -348,6 +302,17 @@ class Serializer
 		} elseif (($title = $theorem->getArguments()->get(1)) && $title->isOptional()) {
 			/** @var AST\CommandArgument $title */
 			$el->addAttributes(['title' => trim($title->getFirstValue()->getValue())]);
+		}
+
+		/** @var AST\Command $label */
+		$label = $theorem->getChildren(AST\Node::filterByType(AST\Command::class))
+			->filter(AST\Command::filterByName('label'))
+			->first() ?: null;
+		if ($label) {
+			$labelValue = Strings::replace($label->getBody()->getFirstValue()->getValue(), '~^[a-z]+\\:~i');
+			$el->addAttributes([
+				'id' => trim(Strings::webalize($labelValue), '-'),
+			]);
 		}
 
 		ob_start();
@@ -461,16 +426,8 @@ class Serializer
 	private function convertFormulae(AST\Text $formulae)
 	{
 		$rawFormulae = $formulae->getValue();
-		$rawFormulae = Strings::replace($rawFormulae, '~(?<!\\\\)\\$~', '');
-
-		foreach ($this->texCallbacks as $callback) {
-			$rawFormulae = $callback($rawFormulae);
-		}
-
-		foreach ($this->texMacros as $macro => $replacement) {
-			$rawFormulae = Strings::replace($rawFormulae, '~' . preg_quote($macro) . '(?![a-zA-Z0-9])~', $replacement);
-		}
-
+//		$rawFormulae = Strings::replace($rawFormulae, '~(?<!\\\\)\\$~', '');
+		$rawFormulae = $this->macrosExpansion->expand($rawFormulae);
 		echo $rawFormulae;
 	}
 

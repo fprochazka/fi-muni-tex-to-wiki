@@ -16,34 +16,34 @@ class Tokenizer
 	const LINE = 3;
 	const COLUMN = 4;
 
-	const TOKEN_COMMENT = 'comment';
+	const TOKEN_COMMENT = 't_comment';
 //	const TOKEN_BRACE_LEFT_ESCAPED = 'brace_left_escaped'; // \(
 //	const TOKEN_BRACE_LEFT = 'brace_left'; // (
 //	const TOKEN_BRACE_RIGHT_ESCAPED = 'brace_right_escaped'; // \)
 //	const TOKEN_BRACE_RIGHT = 'brace_right'; // )
-	const TOKEN_BRACE_CURLY_LEFT_ESCAPED = 'brace_curly_left_escaped'; // \{
-	const TOKEN_BRACE_CURLY_LEFT = 'brace_curly_left'; // {
-	const TOKEN_BRACE_CURLY_RIGHT_ESCAPED = 'brace_curly_right_escaped'; // \}
-	const TOKEN_BRACE_CURLY_RIGHT = 'brace_curly_right'; // }
-	const TOKEN_BRACE_SQUARE_LEFT_ESCAPED = 'brace_square_left_escaped'; // \[
-	const TOKEN_BRACE_SQUARE_LEFT = 'brace_square_left'; // [
-	const TOKEN_BRACE_SQUARE_RIGHT_ESCAPED = 'brace_square_right_escaped'; // \]
-	const TOKEN_BRACE_SQUARE_RIGHT = 'brace_square_right'; // ]
-	const TOKEN_MATH_INLINE = 'math_inline'; // $
-	const TOKEN_MATH_BLOCK = 'math_block'; // $$
-	const TOKEN_COMMAND_BEGIN = 'command_begin'; // \begin
-	const TOKEN_COMMAND_END = 'command_end'; // \end
-	const TOKEN_COMMAND_SECTION = 'command_section'; // \section
-	const TOKEN_COMMAND_SUBSECTION = 'command_subsection'; // \subsection
-	const TOKEN_COMMAND = 'command'; // \command
-	const TOKEN_PIPE = 'pipe'; // |
-	const TOKEN_TILDA = 'tilda'; // ~
-	const TOKEN_EQUALS = 'equals'; // =
-	const TOKEN_COMMA = 'comma'; // ,
-	const TOKEN_BACKSLASH = 'backslash'; // \
-	const TOKEN_NEWLINE = 'newline';
-	const TOKEN_WHITESPACE = 'whitespace';
-	const TOKEN_STRING = 'string';
+	const TOKEN_BRACE_CURLY_LEFT_ESCAPED = 't_brace_curly_left_escaped'; // \{
+	const TOKEN_BRACE_CURLY_LEFT = 't_brace_curly_left'; // {
+	const TOKEN_BRACE_CURLY_RIGHT_ESCAPED = 't_brace_curly_right_escaped'; // \}
+	const TOKEN_BRACE_CURLY_RIGHT = 't_brace_curly_right'; // }
+	const TOKEN_BRACE_SQUARE_LEFT_ESCAPED = 't_brace_square_left_escaped'; // \[
+	const TOKEN_BRACE_SQUARE_LEFT = 't_brace_square_left'; // [
+	const TOKEN_BRACE_SQUARE_RIGHT_ESCAPED = 't_brace_square_right_escaped'; // \]
+	const TOKEN_BRACE_SQUARE_RIGHT = 't_brace_square_right'; // ]
+	const TOKEN_MATH_INLINE = 't_math_inline'; // $
+	const TOKEN_MATH_BLOCK = 't_math_block'; // $$
+	const TOKEN_COMMAND_BEGIN = 't_command_begin'; // \begin
+	const TOKEN_COMMAND_END = 't_command_end'; // \end
+	const TOKEN_COMMAND_SECTION = 't_command_section'; // \section
+	const TOKEN_COMMAND_SUBSECTION = 't_command_subsection'; // \subsection
+	const TOKEN_COMMAND = 't_command'; // \command
+	const TOKEN_PIPE = 't_pipe'; // |
+	const TOKEN_TILDA = 't_tilda'; // ~
+	const TOKEN_EQUALS = 't_equals'; // =
+	const TOKEN_COMMA = 't_comma'; // ,
+	const TOKEN_BACKSLASH = 't_backslash'; // \
+	const TOKEN_NEWLINE = 't_newline';
+	const TOKEN_WHITESPACE = 't_whitespace';
+	const TOKEN_STRING = 't_string';
 
 	/** @var \Nette\Utils\Tokenizer */
 	private $tokenizer;

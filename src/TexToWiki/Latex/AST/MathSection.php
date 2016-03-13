@@ -11,10 +11,11 @@ class MathSection extends Section
 	/** @var \TexToWiki\Latex\AST\Math */
 	private $formulae;
 
-	public function __construct(Command $beginCommand, Math $formulae)
+	public function __construct(Command $beginCommand, ...$body)
 	{
-		parent::__construct($beginCommand, $formulae);
-		$this->formulae = $formulae;
+		parent::__construct($beginCommand, ...$body);
+		$this->formulae = $this->getChildrenRecursive(Node::filterByType(Math::class))
+			->first() ?: null;
 	}
 
 	/**

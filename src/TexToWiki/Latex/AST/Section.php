@@ -24,7 +24,8 @@ class Section extends Node
 	{
 		parent::__construct($beginCommand, ...$body);
 
-		if (($firstArgument = $beginCommand->getFirstArgument()) && ($name = $firstArgument->getFirstValue()) && $name instanceof Text) {
+		$firstArgument = $beginCommand->getFirstArgument();
+		if ($firstArgument && ($name = $firstArgument->getFirstValue()) && $name instanceof Text) {
 			$this->name = $name;
 		}
 

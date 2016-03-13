@@ -2,9 +2,11 @@
 
 namespace TexToWiki\Latex;
 
+use Nette\Utils\Arrays;
 use Nette\Utils\Strings;
 use TexToWiki\InvalidStateException;
 use TexToWiki\Latex\AST;
+use TexToWiki\NotImplementedException;
 
 /**
  * @author Filip Procházka <filip@prochazka.su>
@@ -144,34 +146,97 @@ class Parser
 			$body = $this->parseMathBlockBody($begin);
 			$this->parseSectionEnd($this->stream->nextToken(), $begin); // end command
 
-			return new AST\MathSection($begin, $body);
+			return new AST\MathSection($begin, ...$body);
 
 		} else {
-			$nodes = [];
-			while ($this->stream->isNext() && !$this->stream->isNext(Tokenizer::TOKEN_COMMAND_END)) {
-				$nodes[] = $this->parseNext();
+			$name = trim(strtolower($begin->getSectionName()));
+
+			if (in_array($name, ['itemize', 'enumerate'], true)) {
+				$nodes = $this->parseSectionItems();
+
+			} else {
+				$nodes = [];
+				while ($this->stream->isNext() && !$this->stream->isNext(Tokenizer::TOKEN_COMMAND_END)) {
+					$nodes[] = $this->parseNext();
+				}
 			}
 
 			$this->parseSectionEnd($this->stream->nextToken(), $begin); // end command
 
-			return $this->createSection(trim(strtolower($begin->getSectionName())), $begin, $nodes);
+			return $this->createSection($name, $begin, $nodes);
 		}
 	}
 
-	private function parseMathBlockBody(AST\SectionBoundary $begin) : AST\Math
+	private function parseSectionItems() : array
 	{
+		/** @var AST\Command $itemOpened */
+		$itemOpened = null;
+		$items = $nodes = [];
+		while ($this->stream->isNext() && !$this->stream->isNext(Tokenizer::TOKEN_COMMAND_END)) {
+			if (!$this->stream->isNext(Tokenizer::TOKEN_COMMAND)) {
+				if ($itemOpened) {
+					$nodes[] = $this->parseNext();
+				} else {
+					$this->parseNext(); // skip
+				}
+				continue;
+			}
+
+			$nextCommand = $this->stream->nextToken();
+			$command = $this->parseCommand($nextCommand);
+			if ($nextCommand[Tokenizer::VALUE] === '\\item') {
+				if ($itemOpened) {
+					$items[] = $this->createEnumerationItem($itemOpened, $nodes);
+					$nodes = [];
+				}
+				$itemOpened = $command;
+
+			} else {
+				$nodes[] = $command;
+			}
+		}
+
+		if ($itemOpened && $nodes) {
+			$items[] = $this->createEnumerationItem($itemOpened, $nodes);
+		}
+
+		return $items;
+	}
+
+	private function createEnumerationItem(AST\Command $openingItem, array $body) : AST\EnumerationItem
+	{
+		$args = $openingItem->getArguments()->toArray();
+		$args[] = new AST\CommandArgument(false, ...$body);
+		return new AST\EnumerationItem('item', ...$args);
+	}
+
+	private function parseMathBlockBody(AST\SectionBoundary $begin) : array
+	{
+		$body = [];
 		$startPosition = $this->stream->position;
 		while ($this->stream->isNext()) {
-			if ($this->stream->isNext(Tokenizer::TOKEN_COMMAND_BEGIN)) {
+			if ($this->stream->isNext(Tokenizer::TOKEN_COMMAND)) {
+				$token = $this->stream->nextToken();
+				$commandName = ltrim($token[Tokenizer::VALUE], '\\');
+				switch ($commandName) {
+					case 'label':
+						$body[] = $this->parseCommand($token);
+				}
+
+			} elseif ($this->stream->isNext(Tokenizer::TOKEN_COMMAND_BEGIN)) {
 				$innerBegin = $this->parseSectionBegin($this->stream->nextToken());
-				$this->parseMathBlockBody($begin); // throw away
+				foreach ($this->parseMathBlockBody($begin) as $node) {
+					if ($node instanceof AST\Command) {
+						$body[] = $node;
+					}
+				}
 				$this->parseSectionEnd($this->stream->nextToken(), $innerBegin);
 
 			} elseif ($this->stream->isNext(Tokenizer::TOKEN_COMMAND_END)) {
 				break;
 			}
 
-			$this->stream->nextUntil(Tokenizer::TOKEN_COMMAND_BEGIN, Tokenizer::TOKEN_COMMAND_END);
+			$this->stream->nextUntil(Tokenizer::TOKEN_COMMAND, Tokenizer::TOKEN_COMMAND_BEGIN, Tokenizer::TOKEN_COMMAND_END);
 		}
 		$endPosition = $this->stream->position;
 
@@ -180,7 +245,8 @@ class Parser
 			$text .= $this->stream->nextValue();
 		}
 
-		return new AST\Math(new AST\Text($text), false);
+		$body[] = new AST\Math(new AST\Text($text), false);
+		return $body;
 	}
 
 	private function parseSectionBegin(array $beginToken) : AST\SectionBoundary
@@ -204,7 +270,7 @@ class Parser
 		return $end;
 	}
 
-	private function createSection($name, $begin, array $nodes) : AST\Section
+	private function createSection($name, AST\Command $begin, array $nodes) : AST\Section
 	{
 		switch ($name) {
 			case AST\Theorem\Assumption::NAME:
@@ -232,6 +298,9 @@ class Parser
 				return new AST\Theorem\Remark($begin, ...$nodes);
 			case AST\Theorem\Result::NAME:
 				return new AST\Theorem\Result($begin, ...$nodes);
+			case 'reseni':
+			case AST\Theorem\Solution::NAME:
+				return new AST\Theorem\Solution($begin, ...$nodes);
 			case AST\Theorem\Theorem::NAME:
 				return new AST\Theorem\Theorem($begin, ...$nodes);
 			default:
@@ -239,21 +308,37 @@ class Parser
 		}
 	}
 
-	private function parseCommand(array $token) : AST\Command
+	/**
+	 * @return AST\Command|AST\Section
+	 */
+	private function parseCommand(array $token) : AST\Node
 	{
 		$name = ltrim($token[Tokenizer::VALUE], '\\');
 
-		$arguments = $outerOpen = [];
+		/** @var AST\CommandArgument[] $arguments */
+		$arguments = [];
 		while ($cursor = $this->stream->lookahead([Tokenizer::TOKEN_BRACE_CURLY_LEFT, Tokenizer::TOKEN_BRACE_SQUARE_LEFT], Tokenizer::TOKEN_WHITESPACE, Tokenizer::TOKEN_NEWLINE)) {
 			$this->stream->position = $cursor->position;
 			$open = $this->stream->nextToken();
 			$arguments[] = $this->parseCommandArgument($open, str_replace('left', 'right', $open[Tokenizer::TYPE]));
 		}
 
+		if ($name === 'reseni') {
+			if (count($arguments) !== 1) {
+				throw new NotImplementedException;
+			}
+
+			return $this->createSection(
+				$name,
+				new AST\Command($name, new AST\CommandArgument(false, new AST\Text($name))),
+				$arguments[0]->getChildren()->toArray()
+			);
+		}
+
 		return $this->createCommand($name, $arguments);
 	}
 
-	private function createCommand(string $name, array $arguments)
+	private function createCommand(string $name, array $arguments) : AST\Node
 	{
 		switch ($name) {
 			case 'ms':
@@ -274,6 +359,8 @@ class Parser
 				return new AST\Style\Border($name, ...$arguments);
 			case 'bibitem':
 				return new AST\BibiItem($name, ...$arguments);
+			case 'label':
+				return new AST\Label($name, ...$arguments);
 			case 'begin':
 			case 'end':
 				return new AST\SectionBoundary($name, ...$arguments);

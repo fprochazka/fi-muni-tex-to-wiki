@@ -42,9 +42,10 @@ class LatexMacroExpansion
 	{
 		$this->macros[$name] = (object) [
 			'arguments' => 0,
-			'handler' => function () use ($replacement) : string {
+			'handler' => $c = function () use ($replacement) : string {
 				return '\\' . $replacement;
 			},
+			'paramsReflection' => (new \ReflectionFunction($c))->getParameters(),
 		];
 		return $this;
 	}
@@ -54,6 +55,7 @@ class LatexMacroExpansion
 		$this->macros[$name] = (object) [
 			'arguments' => $argumentsCount,
 			'handler' => $handler,
+			'paramsReflection' => (new \ReflectionFunction($handler))->getParameters(),
 		];
 		return $this;
 	}
@@ -97,11 +99,7 @@ class LatexMacroExpansion
 			$arguments = $this->reduceCommandArguments($stream, $name);
 
 			if (array_key_exists($name, $this->macros)) {
-				$macro = $this->macros[$name];
-				if ($macro->arguments !== count($arguments)) {
-					throw new InvalidArgumentException;
-				}
-				$replacement = call_user_func_array($macro->handler, $arguments);
+				$replacement = $this->callCommandHandler($name, $arguments);
 
 			} else {
 				$replacement = self::streamToString($stream, $beginPosition, $stream->position + 1);
@@ -114,6 +112,20 @@ class LatexMacroExpansion
 		} finally {
 			array_pop($this->context);
 		}
+	}
+
+	private function callCommandHandler(string $name, array $arguments) : string
+	{
+		$macro = $this->macros[$name];
+		if ($macro->arguments !== count($arguments)) {
+			throw new InvalidArgumentException;
+		}
+
+		if (isset($macro->paramsReflection[0]) && $macro->paramsReflection[0]->getName() === 'context') {
+			array_unshift($arguments, $this->context);
+		}
+
+		return call_user_func_array($macro->handler, $arguments);
 	}
 
 	private function reduceCommandArguments(TokenIterator $stream, string $name) : array

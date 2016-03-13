@@ -54,7 +54,7 @@ class Tokenizer
 			return preg_quote($s, '~');
 		};
 		$command = function (string $name) : string {
-			return '\\\\' . $name . '(?![a-zA-Z0-9])';
+			return '\\\\' . $name . '(?![a-zA-Z])';
 		};
 
 		$this->tokenizer = new NTokenizer([
@@ -77,7 +77,7 @@ class Tokenizer
 			self::TOKEN_COMMAND_END => $command('end'),
 			self::TOKEN_COMMAND_SECTION => $command('section'),
 			self::TOKEN_COMMAND_SUBSECTION => $command('subsection'),
-			self::TOKEN_COMMAND => '(?:(?<!\\\\)|^)\\\\[a-zA-Z0-9]+',
+			self::TOKEN_COMMAND => '(?:(?<!\\\\)|^)\\\\[a-zA-Z]+',
 			self::TOKEN_PIPE => $q('|'),
 			self::TOKEN_TILDA => $q('~'),
 			self::TOKEN_EQUALS => $q('='),

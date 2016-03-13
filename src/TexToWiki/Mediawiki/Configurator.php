@@ -2,6 +2,8 @@
 
 namespace TexToWiki\Mediawiki;
 
+use Nette\Utils\Strings;
+
 /**
  * @author Filip Procházka <filip@prochazka.su>
  */
@@ -24,15 +26,6 @@ class Configurator
 				'L' => 'mathcal{L}',
 				'R' => 'mathcal{R}',
 				'P' => 'mathcal{P}',
-				'st' => 'operatorname{\\textrm{st}}',
-				'sgn' => 'operatorname{\\textrm{sgn}}',
-				'tg' => 'operatorname{\\textrm{tg}}',
-				'cotg' => 'operatorname{\\textrm{cotg}}',
-				'arctg' => 'operatorname{\\textrm{arctg}}',
-				'arccotg' => 'operatorname{\\textrm{arccotg}}',
-				'Gr' => 'operatorname{\\textrm{Gr}}',
-				'Eigen' => 'operatorname{\\textrm{Eigen}}',
-				'ul' => 'underline',
 				'eps' => 'varepsilon',
 				'dx' => 'mathrm{d}x',
 				'e' => 'mathrm{e}',
@@ -57,18 +50,58 @@ class Configurator
 			->addMacroHandler('mathbox', 1, LatexMacroExpansion::mask('\fbox{$\displaystyle \, {#1} \, $}\,'))
 			->addMacroHandler('qtextq', 1, LatexMacroExpansion::mask('\quad\text{{#1}}\quad'))
 			->addMacroHandler('qqtextqq', 1, LatexMacroExpansion::mask('\qquad\text{{#1}}\qquad'))
-			->addMacroHandler('label', 1, LatexMacroExpansion::mask(''))
-			->addMacroHandler('ref', 1, LatexMacroExpansion::mask(''));
+			->addMacroHandler('label', 1, LatexMacroExpansion::mask(''));
 
-		$expansion->addMacroHandler('text', 1, function (...$args) {
-			if (stripos($args[0], $prefix = '\\scriptsize') === 0) {
-				return '\\LARGE{' . substr($args[0], strlen($prefix)) . '}';
+		$expansion->addMacroHandler('ul', 1, $ul = function (array $context, string ...$args) : string {
+			$parentContext = isset($context[$i = count($context) - 2]) ? $context[$i] : null;
+
+			if ($parentContext === 'text') {
+				return '}\\underline{\\text{' . $args[0] . '}}\\text{';
+
+			} else {
+				return '\\underline{' . $args[0] . '}';
 			}
-			if (stripos($args[0], $prefix = '\\rm') === 0) {
-				return '\\textrm{' . substr($args[0], strlen($prefix)) . '}';
+		});
+		$expansion->addMacroHandler('underline', 1, $ul);
+
+		$expansion->addMacroHandler('text', 1, function (string ...$args) use ($expansion) : string {
+			$content = $args[0];
+			if (empty($content)) {
+				return '';
 			}
 
-			return '\\text{' . $args[0] . '}';
+			$expansion = new LatexMacroExpansion();
+			if ($m = Strings::match($args[0], '~^(?P<macro>\\\\(scriptsize|small))\\s~')) {
+				$expansion->addMacroHandler('text', 1, function (string ...$args) use ($m) : string {
+					return '{' . $m['macro'] . '\\text{' . $args[0] . '}}';
+				});
+				$content = substr($args[0], strlen($m['macro']));
+
+			} elseif (stripos($args[0], $prefix = '\\rm') === 0) {
+				$expansion->addMacroHandler('text', 1, function (string ...$args) : string {
+					return '\\textrm{' . $args[0] . '}';
+				});
+				$content = substr($args[0], strlen($prefix));
+
+			} else {
+				$expansion->addMacroHandler('text', 1, function (string ...$args) : string {
+					return empty($args[0]) ? '' : '\\text{' . $args[0] . '}';
+				});
+			}
+
+			return $expansion->expand('\\text{' . $content . '}');
+		});
+
+		$expansion->addMacroHandler('operatorname', 1, function (string ...$args) : string {
+			if (in_array($args[0], ['sin', 'cos', 'e'], true)) {
+				return '\\' . $args[0];
+			}
+
+			return '\\operatorname{' . $args[0] . '}';
+		});
+
+		$expansion->addMacroHandler('uv', 1, function (string ...$args) : string {
+			return '„' . $args[0] . '“';
 		});
 
 		return $expansion;

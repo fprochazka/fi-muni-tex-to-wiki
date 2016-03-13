@@ -15,6 +15,9 @@ abstract class Node
 	/** @var Node[] */
 	protected $children = [];
 
+	/** @var Node */
+	private $parent;
+
 	public function __construct(...$children)
 	{
 		foreach ($children as $child) {
@@ -28,6 +31,7 @@ abstract class Node
 			throw new InvalidNodeParentException($this, $child);
 		}
 		$this->children[] = $child;
+		$child->parent = $this;
 	}
 
 	/**
@@ -69,6 +73,24 @@ abstract class Node
 		}
 
 		return new ArrayCollection($results);
+	}
+
+	/**
+	 * @param \Closure|null $filter
+	 * @return Node|null
+	 */
+	public function getParent(\Closure $filter = null)
+	{
+		if ($filter === null) {
+			return $this->parent;
+		}
+
+		$parent = $this->parent;
+		while ($parent !== null && $filter($parent) !== true) {
+			$parent = $parent->parent;
+		}
+
+		return $parent;
 	}
 
 	public function getNodeType() : string

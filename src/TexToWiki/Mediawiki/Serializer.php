@@ -2,10 +2,12 @@
 
 namespace TexToWiki\Mediawiki;
 
+use Nette\Iterators\CachingIterator;
 use Nette\Utils\ArrayHash;
 use Nette\Utils\Html;
 use Nette\Utils\Strings;
 use TexToWiki\InvalidArgumentException;
+use TexToWiki\InvalidStateException;
 use TexToWiki\Latex\AST;
 use TexToWiki\NotImplementedException;
 
@@ -32,6 +34,15 @@ class Serializer
 	public function __construct()
 	{
 		$this->macrosExpansion = Configurator::configureMB102();
+		$this->macrosExpansion->addMacroHandler('ref', 1, $refHandler = function (string ...$args) : string {
+			list($wikiLink, $label) = $this->commandRefToWikiLink($args[0]);
+			if (!$label) {
+				return '';
+			}
+
+			return sprintf('\\wikiref{%s}', $wikiLink);
+		});
+		$this->macrosExpansion->addMacroHandler('eqref', 1, $refHandler);
 	}
 
 	public function convert(AST\Document $document) : \Generator
@@ -126,12 +137,15 @@ class Serializer
 			case AST\Theorem\Proposition::class:
 			case AST\Theorem\Remark::class:
 			case AST\Theorem\Result::class:
+			case AST\Theorem\Solution::class:
 			case AST\Theorem\Theorem::class:
 				return $this->convertTheorem($node);
 			case AST\MathSection::class:
 				return $this->convertMathSection($node);
 			case AST\Section::class:
 				return $this->convertSection($node);
+			case AST\Label::class:
+				break; // ignore
 			default:
 				throw new NotImplementedException((string) $node);
 		}
@@ -228,8 +242,6 @@ class Serializer
 			case 'eqref':
 			case 'ref':
 				return $this->convertCommandRef($command);
-			case 'reseni':
-				return $this->convertTheorem(AST\Theorem\Solution::fromCommand($command));
 			case 'centerline':
 			case 'resizebox':
 				return $this->convertNodeChildren($command->getBody());
@@ -280,7 +292,57 @@ class Serializer
 
 	private function convertCommandRef(AST\Command $caption)
 	{
-//		echo "[ref]"; // ignore for now
+		list($wikiLink, $label) = $this->commandRefToWikiLink($caption->getFirstArgument()->getFirstValue()->getValue());
+		if (!$label) {
+			return; // ignore?
+		}
+		echo sprintf('[[%s|#]]', $wikiLink);
+	}
+
+	private function commandRefToWikiLink(string $caption) : array
+	{
+		/** @var AST\Label $relevantLabel */
+		$relevantLabel = $this->document->getLabels()
+			->filter(AST\Label::filterByValue($caption))
+			->first() ?: null;
+
+		if (!$relevantLabel) {
+			return [NULL, NULL]; // ignore?
+		}
+
+		$section = $relevantLabel->getTocSection();
+		$subSection = $relevantLabel->getTocSubSection();
+		if (!$section && !$subSection) {
+			throw new InvalidStateException('TOC not found');
+		}
+
+		$toUrl = function (string $s) : string {
+			return strtr($s, [
+				' ' => '_',
+				'\'' => '’',
+			]);
+		};
+
+		$page = ':MB102';
+		if ($section) {
+			$page .= '/' . $toUrl($section->getName()->getValue());
+		}
+		if ($subSection) {
+			$page .= '/' . $toUrl($subSection->getName()->getValue());
+		}
+
+		if (in_array($relevantLabel->getLabelType(), ['S', 'SS'], true)) { // toc
+			$wikiLink = $page;
+
+		} else {
+			$target = $relevantLabel->getCompleteLabelId();
+			$wikiLink = sprintf('%s#%s', $page, $target);
+		}
+
+		return [
+			$wikiLink,
+			$relevantLabel
+		];
 	}
 
 	private function convertCommandCaption(AST\Command $caption)
@@ -303,26 +365,13 @@ class Serializer
 	{
 		$el = Html::el($theorem::NAME);
 
-		/** @var AST\Style\Bold $boldTitle */
-		$boldTitle = $theorem->getChildrenRecursive(AST\Node::filterByType(AST\Command::class))
-			->filter(AST\Command::filterByName('bf'))
-			->first() ?: null;
-		if ($boldTitle) {
-			$el->addAttributes(['title' => trim($boldTitle->getFirstArgument()->getFirstValue()->getValue())]);
-
-		} elseif (($title = $theorem->getArguments()->get(1)) && $title->isOptional()) {
-			/** @var AST\CommandArgument $title */
-			$el->addAttributes(['title' => trim($title->getFirstValue()->getValue())]);
+		if ($title = $theorem->getTitle()) {
+			$el->addAttributes(['title' => trim($title->getValue())]);
 		}
 
-		/** @var AST\Command $label */
-		$label = $theorem->getChildren(AST\Node::filterByType(AST\Command::class))
-			->filter(AST\Command::filterByName('label'))
-			->first() ?: null;
-		if ($label) {
-			$labelValue = Strings::replace($label->getBody()->getFirstValue()->getValue(), '~^[a-z]+\\:~i');
+		if ($label = $theorem->getLabel()) {
 			$el->addAttributes([
-				'id' => trim(Strings::webalize($labelValue), '-'),
+				'id' => $label->getLabelId(),
 			]);
 		}
 
@@ -342,7 +391,18 @@ class Serializer
 			$outputName = $this->mathSectionReplacement[$sectionName];
 		}
 
-		echo "\n:<math>\n";
+		$el = Html::el('math');
+
+		/** @var AST\Label $label */
+		$label = $section->getChildren(AST\Node::filterByType(AST\Label::class))
+			->first() ?: null;
+		if ($label) {
+			$el->addAttributes([
+				'id' => $label->getLabelId(),
+			]);
+		}
+
+		echo "\n:", $el->startTag(), "\n";
 		echo '\begin{' . $outputName . '}';
 
 		if ($sectionName === 'tabular') {
@@ -354,7 +414,7 @@ class Serializer
 		$this->convertFormulae($section->getFormulae());
 
 		echo '\end{' . $outputName . '}';
-		echo "\n</math>\n";
+		echo "\n", $el->endTag(), "\n";
 	}
 
 	private function convertSection(AST\Section $section)
@@ -377,13 +437,40 @@ class Serializer
 
 	private function convertSectionItemize(AST\Section $section)
 	{
-		foreach ($section->getBody() as $node) {
-			if ($node instanceof AST\Command && $node->getName() === 'item') {
-				echo "\n", ($section->getName() === 'enumerate' ? '#' : '*'), ' ';
-				continue;
+		/** @var AST\EnumerationItem[] $items */
+		$items = $section->getChildren(AST\Node::filterByType(AST\EnumerationItem::class));
+
+		$list = Html::el('ul');
+		if ($section->getName() && $section->getName()->getValue() === 'enumerate') {
+			$list->setName('ol');
+			if ($specialItem = $items[0]->getFirstArgument()) {
+				/** @var AST\Text $style */
+				$style = $specialItem->getChildrenRecursive(AST\Node::filterByType(AST\Text::class))
+					->first() ?: null;
+				if ($style) {
+					switch ($style->getValue()) {
+						case '(i)':
+							$list->setName('ul')->addClass('roman');
+							break;
+						case '(a)':
+							$list->setName('ul')->addClass('letters');
+							break;
+					}
+				}
 			}
-			$this->convertNode($node);
 		}
+
+		echo $list->startTag(), "\n";
+
+		foreach ($items as $item) {
+			ob_start();
+			$this->convertNodeChildren($item->getBody());
+			$rawContent = ob_get_clean();
+
+			echo '<li>', trim($rawContent), '</li>', "\n";
+		}
+
+		echo $list->endTag(), "\n";
 	}
 
 	private function convertSectionFigure(AST\Section $section)
@@ -413,7 +500,7 @@ class Serializer
 			->first() ?: null;
 
 		if ($picture !== null) {
-			echo "\n<pre>" . $picture->getFormulae()->getValue() . "</pre>\n";
+			 echo "\n<pre>" . $picture->getFormulae()->getValue() . "</pre>\n";
 		}
 
 		/** @var AST\Command[] $includeGraphics */
